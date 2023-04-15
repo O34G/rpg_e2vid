@@ -1,3 +1,4 @@
+# models: E2VID_lightweight.pth.tar, firenet_1000.pth.tar
 MODEL="pretrained/firenet_1000.pth.tar"
 INPUT_DATA="./data/dynamic_6dof.zip"
 OUT_FOLDER="./output/"
