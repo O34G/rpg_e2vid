@@ -4,7 +4,11 @@ from model.model import *
 
 def load_model(path_to_model):
     print('Loading model {}...'.format(path_to_model))
-    raw_model = torch.load(path_to_model)
+    # my
+    map_location = get_device(False)
+    raw_model = torch.load(path_to_model, map_location)
+    # orig
+    # raw_model = torch.load(path_to_model)
     arch = raw_model['arch']
 
     try:

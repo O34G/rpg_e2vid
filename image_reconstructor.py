@@ -9,6 +9,8 @@ from utils.timers import CudaTimer, cuda_timers
 from os.path import join
 from collections import deque
 import torch.nn.functional as F
+# my
+from utils.loading_utils import get_device
 
 
 class ImageReconstructor:
@@ -16,7 +18,10 @@ class ImageReconstructor:
 
         self.model = model
         self.use_gpu = options.use_gpu
-        self.device = torch.device('cuda:0') if self.use_gpu else torch.device('cpu')
+        # my
+        self.device = get_device(self.use_gpu)
+        # orig
+        # self.device = torch.device('cuda:0') if self.use_gpu else torch.device('cpu')
         self.height = height
         self.width = width
         self.num_bins = num_bins
