@@ -3,7 +3,7 @@
 # models: E2VID_lightweight.pth.tar, firenet_1000.pth.tar
 MODEL="pretrained/firenet_1000.pth.tar"
 
-# window duration (expressed in ms)
+# window duration (in ms)
 # window_duration = (1 / framerate) * 1000
 WINDOW_DURATION=0.1
 
