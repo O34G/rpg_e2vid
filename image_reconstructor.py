@@ -6,6 +6,7 @@ from utils.inference_utils import CropParameters, EventPreprocessor, IntensityRe
 from utils.inference_utils import upsample_color_image, merge_channels_into_color_image  # for color reconstruction
 from utils.util import robust_min, robust_max
 from utils.timers import CudaTimer, cuda_timers
+from utils.timers import Timer, timers
 from os.path import join
 from collections import deque
 import torch.nn.functional as F
@@ -62,46 +63,90 @@ class ImageReconstructor:
     def update_reconstruction(self, event_tensor, event_tensor_id, stamp=None):
         with torch.no_grad():
 
-            with CudaTimer('Reconstruction'):
+            if self.use_gpu and torch.cuda.is_available():
 
-                with CudaTimer('NumPy (CPU) -> Tensor (GPU)'):
-                    events = event_tensor.unsqueeze(dim=0)
-                    events = events.to(self.device)
+                with CudaTimer('Reconstruction'):
 
-                events = self.event_preprocessor(events)
+                    with CudaTimer('NumPy (CPU) -> Tensor (GPU)'):
+                        events = event_tensor.unsqueeze(dim=0)
+                        events = events.to(self.device)
 
-                # Resize tensor to [1 x C x crop_size x crop_size] by applying zero padding
-                events_for_each_channel = {'grayscale': self.crop.pad(events)}
-                reconstructions_for_each_channel = {}
-                if self.perform_color_reconstruction:
-                    events_for_each_channel['R'] = self.crop_halfres.pad(events[:, :, 0::2, 0::2])
-                    events_for_each_channel['G'] = self.crop_halfres.pad(events[:, :, 0::2, 1::2])
-                    events_for_each_channel['W'] = self.crop_halfres.pad(events[:, :, 1::2, 0::2])
-                    events_for_each_channel['B'] = self.crop_halfres.pad(events[:, :, 1::2, 1::2])
+                    events = self.event_preprocessor(events)
 
-                # Reconstruct new intensity image for each channel (grayscale + RGBW if color reconstruction is enabled)
-                for channel in events_for_each_channel.keys():
-                    with CudaTimer('Inference'):
-                        new_predicted_frame, states = self.model(events_for_each_channel[channel],
-                                                                 self.last_states_for_each_channel[channel])
+                    # Resize tensor to [1 x C x crop_size x crop_size] by applying zero padding
+                    events_for_each_channel = {'grayscale': self.crop.pad(events)}
+                    reconstructions_for_each_channel = {}
+                    if self.perform_color_reconstruction:
+                        events_for_each_channel['R'] = self.crop_halfres.pad(events[:, :, 0::2, 0::2])
+                        events_for_each_channel['G'] = self.crop_halfres.pad(events[:, :, 0::2, 1::2])
+                        events_for_each_channel['W'] = self.crop_halfres.pad(events[:, :, 1::2, 0::2])
+                        events_for_each_channel['B'] = self.crop_halfres.pad(events[:, :, 1::2, 1::2])
 
-                    if self.no_recurrent:
-                        self.last_states_for_each_channel[channel] = None
-                    else:
-                        self.last_states_for_each_channel[channel] = states
+                    # Reconstruct new intensity image for each channel (grayscale + RGBW if color reconstruction is enabled)
+                    for channel in events_for_each_channel.keys():
+                        with CudaTimer('Inference'):
+                            new_predicted_frame, states = self.model(events_for_each_channel[channel],
+                                                                    self.last_states_for_each_channel[channel])
 
-                    # Output reconstructed image
-                    crop = self.crop if channel == 'grayscale' else self.crop_halfres
+                        if self.no_recurrent:
+                            self.last_states_for_each_channel[channel] = None
+                        else:
+                            self.last_states_for_each_channel[channel] = states
 
-                    # Unsharp mask (on GPU)
-                    new_predicted_frame = self.unsharp_mask_filter(new_predicted_frame)
+                        # Output reconstructed image
+                        crop = self.crop if channel == 'grayscale' else self.crop_halfres
 
-                    # Intensity rescaler (on GPU)
-                    new_predicted_frame = self.intensity_rescaler(new_predicted_frame)
+                        # Unsharp mask (on GPU)
+                        new_predicted_frame = self.unsharp_mask_filter(new_predicted_frame)
 
-                    with CudaTimer('Tensor (GPU) -> NumPy (CPU)'):
-                        reconstructions_for_each_channel[channel] = new_predicted_frame[0, 0, crop.iy0:crop.iy1,
-                                                                                        crop.ix0:crop.ix1].cpu().numpy()
+                        # Intensity rescaler (on GPU)
+                        new_predicted_frame = self.intensity_rescaler(new_predicted_frame)
+
+                        with CudaTimer('Tensor (GPU) -> NumPy (CPU)'):
+                            reconstructions_for_each_channel[channel] = new_predicted_frame[0, 0, crop.iy0:crop.iy1,
+                                                                                            crop.ix0:crop.ix1].cpu().numpy()
+            else:
+
+                with Timer('Reconstruction'):
+
+                    with Timer('NumPy (CPU) -> Tensor (CPU)'):
+                        events = event_tensor.unsqueeze(dim=0)
+                        events = events.to(self.device)
+
+                    events = self.event_preprocessor(events)
+
+                    # Resize tensor to [1 x C x crop_size x crop_size] by applying zero padding
+                    events_for_each_channel = {'grayscale': self.crop.pad(events)}
+                    reconstructions_for_each_channel = {}
+                    if self.perform_color_reconstruction:
+                        events_for_each_channel['R'] = self.crop_halfres.pad(events[:, :, 0::2, 0::2])
+                        events_for_each_channel['G'] = self.crop_halfres.pad(events[:, :, 0::2, 1::2])
+                        events_for_each_channel['W'] = self.crop_halfres.pad(events[:, :, 1::2, 0::2])
+                        events_for_each_channel['B'] = self.crop_halfres.pad(events[:, :, 1::2, 1::2])
+
+                    # Reconstruct new intensity image for each channel (grayscale + RGBW if color reconstruction is enabled)
+                    for channel in events_for_each_channel.keys():
+                        with Timer('Inference'):
+                            new_predicted_frame, states = self.model(events_for_each_channel[channel],
+                                                                    self.last_states_for_each_channel[channel])
+
+                        if self.no_recurrent:
+                            self.last_states_for_each_channel[channel] = None
+                        else:
+                            self.last_states_for_each_channel[channel] = states
+
+                        # Output reconstructed image
+                        crop = self.crop if channel == 'grayscale' else self.crop_halfres
+
+                        # Unsharp mask (on GPU)
+                        new_predicted_frame = self.unsharp_mask_filter(new_predicted_frame)
+
+                        # Intensity rescaler (on GPU)
+                        new_predicted_frame = self.intensity_rescaler(new_predicted_frame)
+
+                        with Timer('Tensor (CPU) -> NumPy (CPU)'):
+                            reconstructions_for_each_channel[channel] = new_predicted_frame[0, 0, crop.iy0:crop.iy1,
+                                                                                            crop.ix0:crop.ix1].cpu().numpy()
 
                 if self.perform_color_reconstruction:
                     out = merge_channels_into_color_image(reconstructions_for_each_channel)
